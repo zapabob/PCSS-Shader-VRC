@@ -1,0 +1,305 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using UnityEngine;
+using UnityEngine.VFX;
+using VRC.SDK3.Avatars.Components;
+using VRC.SDKBase;
+
+namespace VRCTrailFX
+{
+    [AddComponentMenu("VRCTrailFX/VRCTrailFX Pro")]
+    public class VRCTrailFXPro : MonoBehaviour
+    {
+        public VRCAvatarDescriptor avatarDescriptor;
+        public VRCExpressionsMenu expressionsMenu;
+        public Material trailMaterial;
+        public float trailWidthMultiplier = 1f;
+        public float trailLengthMultiplier = 1f;
+        public AudioSource audioSource;
+        public string fluctuationParameterName = "Fluctuation";
+        public float fluctuationSensitivity = 1f;
+        public Color gamingColor = Color.blue;
+        public float fftWindow = 0.5f;
+        public float distortionStrength = 0.1f;
+        public float minFrequency = 20f;
+        public float maxFrequency = 20000f;
+
+        private VRCExpressionParameters expressionParameters;
+        private VRCAvatarParameter trailWidthParameter;
+        private VRCAvatarParameter trailLengthParameter;
+        private VRCAvatarParameter soundEffectToggleParameter;
+        private VRCAvatarParameter gamingColorParameter;
+        private VRCAvatarParameter fftWindowParameter;
+        private VRCAvatarParameter distortionParameter;
+
+        private TrailRenderer[] trailRenderers;
+        private AudioSource audioSourceInternal;
+        private float[] samples = new float[1024];
+        private float[] spectrum = new float[512];
+        private float[] fluctuation = new float[512];
+
+        private const string LICENSE_KEY = "VN3-VRCTRAILFX-20240201";
+        private const string PUBLIC_KEY = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqWzFOITTmA7tTT5/mH...";
+
+        private void Awake()
+        {
+            if (!IsLicenseValid())
+            {
+                enabled = false;
+                Debug.LogError("Invalid VN3 license. VRCTrailFX will not be executed.");
+                return;
+            }
+        }
+
+        private void Start()
+        {
+            try
+            {
+                InitializeParameters();
+                InitializeTrails();
+                InitializeAudio();
+                InitializeUI();
+            }
+            catch (Exception e)
+            {
+                enabled = false;
+                Debug.LogError($"An error occurred during initialization: {e.Message}");
+            }
+        }
+
+        private void Update()
+        {
+            try
+            {
+                if (!audioSourceInternal.isPlaying) { return; }
+                
+                UpdateParameters();
+                UpdateTrails();
+                UpdateEffects();
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"An error occurred during update: {e.Message}");
+            }
+        }
+
+        private bool IsLicenseValid()
+        {
+            try
+            {
+                string encryptedKey = EncryptLicenseKey(LICENSE_KEY);
+                string decryptedKey = DecryptLicenseKey(encryptedKey);
+                return decryptedKey == LICENSE_KEY;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private string EncryptLicenseKey(string licenseKey)
+        {
+            using (var rsa = new RSACryptoServiceProvider(2048))
+            {
+                rsa.FromXmlString(PUBLIC_KEY);
+                byte[] licenseBytes = Encoding.UTF8.GetBytes(licenseKey);
+                byte[] encryptedBytes = rsa.Encrypt(licenseBytes, true);
+                return Convert.ToBase64String(encryptedBytes);
+            }
+        }
+
+        private string DecryptLicenseKey(string encryptedKey)
+        {
+            using (var rsa = new RSACryptoServiceProvider(2048))
+            {
+                rsa.FromXmlString(PUBLIC_KEY);
+                byte[] encryptedBytes = Convert.FromBase64String(encryptedKey);
+                byte[] decryptedBytes = rsa.Decrypt(encryptedBytes, true);
+                return Encoding.UTF8.GetString(decryptedBytes);
+            }
+        }
+
+        private void InitializeParameters()
+        {
+            expressionParameters = avatarDescriptor.expressionParameters;
+            trailWidthParameter = expressionParameters.FindParameter("TrailWidth");
+            trailLengthParameter = expressionParameters.FindParameter("TrailLength");
+            soundEffectToggleParameter = expressionParameters.FindParameter("SoundEffectToggle");
+            gamingColorParameter = expressionParameters.FindParameter("GamingColor");
+            fftWindowParameter = expressionParameters.FindParameter("FFTWindow");
+            distortionParameter = expressionParameters.FindParameter("Distortion");
+        }
+
+        private void InitializeTrails()
+        {
+            trailRenderers = GetComponentsInChildren<TrailRenderer>();
+            foreach (var trail in trailRenderers)
+            {
+                trail.sharedMaterial = trailMaterial;
+                trail.widthMultiplier = trailWidthMultiplier;
+                trail.time = trailLengthMultiplier;
+            }
+        }
+
+        private void InitializeAudio()
+        {
+            audioSourceInternal = audioSource != null ? audioSource : gameObject.AddComponent<AudioSource>();
+        }
+
+        private void InitializeUI()
+        {
+            if (expressionsMenu == null) { return; }
+            
+            AddExpressionControl("Trail Width", trailWidthParameter, VRCExpressionsMenu.Control.ControlType.RadialPuppet);
+            AddExpressionControl("Trail Length", trailLengthParameter, VRCExpressionsMenu.Control.ControlType.RadialPuppet);
+            AddExpressionControl("Sound Effect", soundEffectToggleParameter, VRCExpressionsMenu.Control.ControlType.Toggle);
+            AddExpressionControl("Gaming Color", gamingColorParameter, VRCExpressionsMenu.Control.ControlType.Color);
+            AddExpressionControl("FFT Window", fftWindowParameter, VRCExpressionsMenu.Control.ControlType.RadialPuppet);
+            AddExpressionControl("Distortion", distortionParameter, VRCExpressionsMenu.Control.ControlType.RadialPuppet);
+        }
+
+        private void AddExpressionControl(string name, VRCAvatarParameter parameter, VRCExpressionsMenu.Control.ControlType type)
+        {
+            expressionsMenu.controls.Add(new VRCExpressionsMenu.Control
+            {
+                name = name,
+                parameter = parameter,
+                type = type
+            });
+        }
+
+        private void UpdateParameters()
+        {
+            trailWidthMultiplier = trailWidthParameter.value;
+            trailLengthMultiplier = trailLengthParameter.value;
+            gamingColor = gamingColorParameter.value;
+            fftWindow = fftWindowParameter.value;
+            distortionStrength = distortionParameter.value;
+        }
+
+        private void UpdateTrails()
+        {
+            foreach (var trail in trailRenderers)
+            {
+                trail.widthMultiplier = trailWidthMultiplier;
+                trail.time = trailLengthMultiplier;
+            }
+        }
+
+        private void UpdateEffects()
+        {
+            audioSourceInternal.GetOutputData(samples, 0);
+            AudioAnalyzer.FFT(samples, spectrum, fftWindow);
+            GenerateFluctuation();
+            ApplyFrequencyRange();
+            UpdateVFXParameters();
+        }
+
+        private void GenerateFluctuation()
+        {
+            for (int i = 1; i < fluctuation.Length; i++)
+            {
+                float f = (float)i / fluctuation.Length;
+                fluctuation[i] = Mathf.Lerp(fluctuation[i], UnityEngine.Random.Range(-1f, 1f), Time.deltaTime * Mathf.Pow(f, -1f));
+            }
+
+            for (int i = 0; i < spectrum.Length; i++)
+            {
+                spectrum[i] *= (1f + fluctuation[i] * fluctuationSensitivity);
+            }
+        }
+
+        private void ApplyFrequencyRange()
+        {
+            for (int i = 0; i < spectrum.Length; i++)
+            {
+                float freq = AudioSettings.outputSampleRate * 0.5f * i / spectrum.Length;
+                if (freq < minFrequency || freq > maxFrequency)
+                {
+                    spectrum[i] = 0f;
+                }
+            }
+        }
+
+        private void UpdateVFXParameters()
+        {
+            foreach (var trailRenderer in trailRenderers)
+            {
+                var vfxGraph = trailRenderer.GetComponent<VisualEffect>();
+                if (vfxGraph == null) { continue; }
+                
+                vfxGraph.SetFloat(fluctuationParameterName, spectrum[0]);
+                vfxGraph.SetVector3("GamingColor", gamingColor);
+                vfxGraph.SetFloat("Distortion", distortionStrength);
+            }
+        }
+    }
+
+    public static class AudioAnalyzer
+    {
+        public static void FFT(float[] samples, float[] spectrum, float windowSize)
+        {
+            int n = samples.Length;
+            int m = (int)Mathf.Pow(2, Mathf.Ceil(Mathf.Log(n) / Mathf.Log(2)));
+
+            float[] paddedSamples = new float[m];
+            Array.Copy(samples, paddedSamples, n);
+
+            float[] window = HammingWindow(n, windowSize);
+            for (int i = 0; i < n; i++)
+            {
+                paddedSamples[i] *= window[i];
+            }
+
+            FFT(paddedSamples, spectrum, m);
+        }
+
+        private static void FFT(float[] samples, float[] spectrum, int n)
+        {
+            if (n <= 1)
+            {
+                spectrum[0] = samples[0];
+                return;
+            }
+
+            int m = n / 2;
+            float[] even = new float[m];
+            float[] odd = new float[m];
+
+            for (int i = 0; i < m; i++)
+            {
+                even[i] = samples[2 * i];
+                odd[i] = samples[2 * i + 1];
+            }
+
+            float[] evenSpectrum = new float[m];
+            float[] oddSpectrum = new float[m];
+
+            FFT(even, evenSpectrum, m);
+            FFT(odd, oddSpectrum, m);
+
+            for (int i = 0; i < m; i++)
+            {
+                float theta = -2 * Mathf.PI * i / n;
+                float cos = Mathf.Cos(theta);
+                float sin = Mathf.Sin(theta);
+
+                spectrum[i] = evenSpectrum[i] + cos * oddSpectrum[i] - sin * oddSpectrum[i];
+                spectrum[i + m] = evenSpectrum[i] - cos * oddSpectrum[i] + sin * oddSpectrum[i];
+            }
+        }
+
+        private static float[] HammingWindow(int n, float alpha)
+        {
+            float[] window = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                window[i] = alpha - (1 - alpha) * Mathf.Cos(2 * Mathf.PI * i / (n - 1));
+            }
+            return window;
+        }
+    }
+}

@@ -1,0 +1,255 @@
+// VRCTrailFX.cs
+using UnityEngine;
+using VRC.SDK3.Avatars.Components;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace VRCTrailFX
+{
+    [RequireComponent(typeof(AudioSource))]
+    public class VRCTrailFX : MonoBehaviour
+    {
+        public GameObject trailPrefab;
+        public Transform[] effectPoints;
+        public float audioSensitivity = 1f;
+        public float trailLifetime = 1f;
+        public bool audioReactive = true;
+        public Color audioReactiveColor = Color.white;
+        public Color gamingColor = Color.blue;
+
+        public VRCAvatarDescriptor avatarDescriptor;
+        public VRCExpressionsMenu expressionsMenu;
+        public string trailToggleParameterName = "TrailToggle";
+
+        private const string LICENSE_KEY = "VN3-VRCTRAILFX-20240201";
+        private const string PUBLIC_KEY = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCqWzFOITTmA7tTT5/mH...";
+
+        private AudioSource audioSource;
+        private VRCPlayerApi localPlayer;
+        private bool isInitialized = false;
+        private List<GameObject> trailInstances = new List<GameObject>();
+
+        private VRCExpressionParameters expressionParameters;
+        private VRCAvatarParameter trailToggleParameter;
+
+        private void Start()
+        {
+            audioSource = GetComponent<AudioSource>();
+            localPlayer = Networking.LocalPlayer;
+            expressionParameters = avatarDescriptor.expressionParameters;
+            trailToggleParameter = expressionParameters.FindParameter(trailToggleParameterName);
+
+            if (!IsLicenseValid())
+            {
+                enabled = false;
+                LogError("Invalid VN3 license. VRCTrailFX will not be executed.");
+                return;
+            }
+
+            InitializeTrailEffects();
+            InitializeExpressionMenu();
+            StartCoroutine(MonitorPerformance());
+            StartCoroutine(MonitorErrors());
+        }
+
+        private void InitializeTrailEffects()
+        {
+            try
+            {
+                foreach (var point in effectPoints)
+                {
+                    if (point == null)
+                    {
+                        LogWarning("EffectPoint is null. Skipping...");
+                        continue;
+                    }
+
+                    var trailInstance = Instantiate(trailPrefab, point.position, Quaternion.identity, point);
+                    trailInstance.transform.localPosition = Vector3.zero;
+                    trailInstances.Add(trailInstance);
+
+                    var trailRenderer = trailInstance.GetComponent<TrailRenderer>();
+                    if (trailRenderer != null)
+                    {
+                        trailRenderer.time = trailLifetime;
+
+                        if (audioReactive)
+                        {
+                            var trailColor = trailRenderer.colorGradient;
+                            trailColor.colorKeys = new GradientColorKey[] { new GradientColorKey(audioReactiveColor, 0f), new GradientColorKey(audioReactiveColor, 1f) };
+                            trailRenderer.colorGradient = trailColor;
+                        }
+                    }
+                }
+
+                isInitialized = true;
+                LogInfo("VRCTrailFX initialized successfully.");
+            }
+            catch (Exception ex)
+            {
+                LogError($"Error initializing VRCTrailFX: {ex.Message}");
+            }
+        }
+
+        private void InitializeExpressionMenu()
+        {
+            if (expressionsMenu != null && trailToggleParameter != null)
+            {
+                expressionsMenu.controls.Add(new VRCExpressionsMenu.Control
+                {
+                    name = "Trail Toggle",
+                    parameter = trailToggleParameter,
+                    type = VRCExpressionsMenu.Control.ControlType.Toggle
+                });
+            }
+        }
+
+        private void Update()
+        {
+            if (!isInitialized || !audioReactive || audioSource == null)
+                return;
+
+            float[] spectrum = new float[256];
+            audioSource.GetSpectrumData(spectrum, 0, FFTWindow.Blackman);
+            float audioLevel = GetAudioLevel(spectrum);
+
+            foreach (var trailInstance in trailInstances)
+            {
+                if (trailInstance == null)
+                    continue;
+
+                var trailRenderer = trailInstance.GetComponent<TrailRenderer>();
+                if (trailRenderer != null)
+                {
+                    var trailColor = trailRenderer.colorGradient;
+                    trailColor.colorKeys = new GradientColorKey[] { new GradientColorKey(Color.Lerp(gamingColor, audioReactiveColor, audioLevel), 0f), new GradientColorKey(Color.Lerp(gamingColor, audioReactiveColor, audioLevel), 1f) };
+                    trailRenderer.colorGradient = trailColor;
+                }
+            }
+
+            if (trailToggleParameter != null)
+            {
+                foreach (var trailInstance in trailInstances)
+                {
+                    trailInstance.SetActive(trailToggleParameter.value > 0.5f);
+                }
+            }
+        }
+
+        private float GetAudioLevel(float[] spectrum)
+        {
+            float sum = 0f;
+            for (int i = 0; i < spectrum.Length; i++)
+            {
+                sum += spectrum[i] * (i + 1);
+            }
+            return Mathf.Clamp01(sum * audioSensitivity);
+        }
+
+        private bool IsLicenseValid()
+        {
+            try
+            {
+                string encryptedKey = EncryptLicenseKey(LICENSE_KEY);
+                string decryptedKey = DecryptLicenseKey(encryptedKey);
+                return decryptedKey == LICENSE_KEY;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private string EncryptLicenseKey(string licenseKey)
+        {
+            using (var rsa = new RSACryptoServiceProvider(2048))
+            {
+                rsa.FromXmlString(PUBLIC_KEY);
+                byte[] licenseBytes = Encoding.UTF8.GetBytes(licenseKey);
+                byte[] encryptedBytes = rsa.Encrypt(licenseBytes, true);
+                return Convert.ToBase64String(encryptedBytes);
+            }
+        }
+
+        private string DecryptLicenseKey(string encryptedKey)
+        {
+            using (var rsa = new RSACryptoServiceProvider(2048))
+            {
+                rsa.FromXmlString(PUBLIC_KEY);
+                byte[] encryptedBytes = Convert.FromBase64String(encryptedKey);
+                byte[] decryptedBytes = rsa.Decrypt(encryptedBytes, true);
+                return Encoding.UTF8.GetString(decryptedBytes);
+            }
+        }
+
+        private IEnumerator MonitorPerformance()
+        {
+            while (true)
+            {
+                if (localPlayer == null)
+                {
+                    LogWarning("LocalPlayer is null. Retrying in 1 second...");
+                    yield return new WaitForSeconds(1f);
+                    localPlayer = Networking.LocalPlayer;
+                    continue;
+                }
+
+                if (localPlayer.IsUserInVR())
+                {
+                    if (Time.frameCount % 100 == 0)
+                    {
+                        int frameRate = (int)(1f / Time.unscaledDeltaTime);
+                        if (frameRate < 60)
+                        {
+                            LogWarning($"Performance warning: Frame rate dropped to {frameRate}");
+                        }
+                    }
+                }
+
+                yield return null;
+            }
+        }
+
+        private IEnumerator MonitorErrors()
+        {
+            while (true)
+            {
+                // VRCTrailFXのエラーや脆弱性を監視するロジックをここに実装
+                // 例: 不正なデータの検出、ネットワークエラーの監視、例外のログ記録など
+
+                yield return new WaitForSeconds(1f);
+            }
+        }
+
+        private void LogInfo(string message)
+        {
+            Debug.Log($"[VRCTrailFX] {message}");
+        }
+
+        private void LogWarning(string message)
+        {
+            Debug.LogWarning($"[VRCTrailFX] {message}");
+        }
+
+        private void LogError(string message)
+        {
+            Debug.LogError($"[VRCTrailFX] {message}");
+        }
+
+        private void OnDestroy()
+        {
+            foreach (var trailInstance in trailInstances)
+            {
+                if (trailInstance != null)
+                {
+                    Destroy(trailInstance);
+                }
+            }
+            trailInstances.Clear();
+        }
+    }
+}

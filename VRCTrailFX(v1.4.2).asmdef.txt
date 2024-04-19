@@ -1,0 +1,30 @@
+{
+    "name": "com.vrctrailfx.runtime",
+    "references": [
+        "VRC.Udon",
+        "VRC.UdonSharp",
+        "VRC.SDK3",
+        "Unity.Postprocessing.Runtime",
+        "Unity.TextMeshPro"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.vrchat.udonsharp",
+            "expression": "1.1.0",
+            "define": "UDONSHARP_1_1_0_OR_NEWER"
+        },
+        {
+            "name": "com.vrchat.worlds",
+            "expression": "1.0.0",
+            "define": "VRCHAT_WORLDS_1_0_0_OR_NEWER"
+        }
+    ],
+    "noEngineReferences": false
+}

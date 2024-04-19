@@ -1,0 +1,63 @@
+using UnityEngine;
+using UnityEditor;
+using VRC.SDK3.Avatars.Components;
+using VRC.SDK3.Avatars.ScriptableObjects;
+using System;
+
+namespace VRCTrailFX
+{
+    public class VRCTrailFXAvatarSetup : Editor
+    {
+        [MenuItem("VRCTrailFX/Setup Avatar")]
+        public static void SetupAvatar()
+        {
+            try
+            {
+                GameObject avatar = Selection.activeGameObject;
+                if (avatar == null)
+                {
+                    throw new Exception("Please select an avatar GameObject.");
+                }
+
+                VRCAvatarDescriptor descriptor = avatar.GetComponent<VRCAvatarDescriptor>();
+                if (descriptor == null)
+                {
+                    throw new Exception("Selected GameObject is not a valid avatar.");
+                }
+
+                VRCExpressionParameters expressionParameters = descriptor.expressionParameters;
+                if (expressionParameters == null)
+                {
+                    expressionParameters = CreateInstance<VRCExpressionParameters>();
+                    string assetPath = "Assets/VRCTrailFX/ExpressionParameters.asset";
+                    AssetDatabase.CreateAsset(expressionParameters, assetPath);
+                    descriptor.expressionParameters = expressionParameters;
+                }
+
+                string prefabPath = "Assets/VRCTrailFX/VRCTrailFX.prefab";
+                GameObject trailFXPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                if (trailFXPrefab == null)
+                {
+                    throw new Exception("VRCTrailFX prefab not found. Please create the prefab first.");
+                }
+
+                GameObject trailFXInstance = PrefabUtility.InstantiatePrefab(trailFXPrefab) as GameObject;
+                trailFXInstance.transform.SetParent(avatar.transform, false);
+
+                VRCTrailFX trailFX = trailFXInstance.GetComponent<VRCTrailFX>();
+                trailFX.avatarDescriptor = descriptor;
+                trailFX.expressionParameters = expressionParameters;
+            }
+            catch (Exception ex)
+            {
+                HandleError(ex);
+            }
+        }
+
+        private static void HandleError(Exception ex)
+        {
+            string errorMessage = $"An error occurred while setting up the avatar:\n\n{ex.Message}";
+            EditorUtility.DisplayDialog("VRCTrailFX Error", errorMessage, "OK");
+        }
+    }
+}

@@ -1,0 +1,157 @@
+using UnityEngine;
+using System;
+
+public class VRCTrailFXFree : MonoBehaviour
+{
+    public bool isTrailEnabled = true;
+    public Color[] predefinedColors = new Color[5];
+    public float[] trailLengths = new float[3];
+    public float[] trailWidths = new float[3];
+    public Texture[] trailTextures = new Texture[3];
+
+    private TrailRenderer trailRenderer;
+
+    private void Awake()
+    {
+        try
+        {
+            trailRenderer = GetComponent<TrailRenderer>();
+            if (trailRenderer == null)
+            {
+                throw new InvalidOperationException("TrailRenderer component not found!");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error in VRCTrailFXFree Awake: {ex.Message}");
+            enabled = false;
+        }
+    }
+
+    private void OnEnable()
+    {
+        try
+        {
+            ApplyTrailSettings();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error enabling VRCTrailFXFree: {ex.Message}");
+            enabled = false;
+        }
+    }
+
+    private void OnDisable()
+    {
+        try
+        {
+            trailRenderer.enabled = false;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error disabling VRCTrailFXFree: {ex.Message}");
+        }
+    }
+
+    public void SetTrailEnabled(bool enabled)
+    {
+        try
+        {
+            isTrailEnabled = enabled;
+            ApplyTrailSettings();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error setting trail enabled: {ex.Message}");
+        }
+    }
+
+    public void SetTrailColor(int colorIndex)
+    {
+        try
+        {
+            if (colorIndex >= 0 && colorIndex < predefinedColors.Length)
+            {
+                trailRenderer.material.color = predefinedColors[colorIndex];
+            }
+            else
+            {
+                throw new ArgumentOutOfRangeException(nameof(colorIndex), "Invalid color index!");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error setting trail color: {ex.Message}");
+        }
+    }
+
+    public void SetTrailLength(int lengthIndex)
+    {
+        try
+        {
+            if (lengthIndex >= 0 && lengthIndex < trailLengths.Length)
+            {
+                trailRenderer.time = trailLengths[lengthIndex];
+            }
+            else
+            {
+                throw new ArgumentOutOfRangeException(nameof(lengthIndex), "Invalid length index!");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error setting trail length: {ex.Message}");
+        }
+    }
+
+    public void SetTrailWidth(int widthIndex)
+    {
+        try
+        {
+            if (widthIndex >= 0 && widthIndex < trailWidths.Length)
+            {
+                trailRenderer.startWidth = trailWidths[widthIndex];
+                trailRenderer.endWidth = trailWidths[widthIndex];
+            }
+            else
+            {
+                throw new ArgumentOutOfRangeException(nameof(widthIndex), "Invalid width index!");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error setting trail width: {ex.Message}");
+        }
+    }
+
+    public void SetTrailTexture(int textureIndex)
+    {
+        try
+        {
+            if (textureIndex >= 0 && textureIndex < trailTextures.Length)
+            {
+                trailRenderer.material.mainTexture = trailTextures[textureIndex];
+            }
+            else
+            {
+                throw new ArgumentOutOfRangeException(nameof(textureIndex), "Invalid texture index!");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error setting trail texture: {ex.Message}");
+        }
+    }
+
+    private void ApplyTrailSettings()
+    {
+        try
+        {
+            trailRenderer.enabled = isTrailEnabled;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"Error applying trail settings: {ex.Message}");
+        }
+    }
+}
