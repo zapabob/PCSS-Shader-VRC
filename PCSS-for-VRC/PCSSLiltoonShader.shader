@@ -174,41 +174,164 @@ public class PCSSLightPlugin : MonoBehaviour
         copyShadowBuffer.Blit(BuiltinRenderTextureType.CurrentActive, shadowRenderTexture);
         copyShadowBuffer.SetGlobalTexture(shadowmapPropID, shadowRenderTexture);
     }
-
-    private void Update()
+Shader "PCSSliltoon"
+{
+    Properties
     {
-        if (avatarObject == null)
-        {
-            avatarObject = FindAvatarObject();
-        }
+        // liltoonのプロパティ
+        // ...
+    }
 
-        if (avatarObject != null)
+    SubShader
+    {
+        Tags { "RenderType" = "Opaque" }
+        LOD 100
+
+        Pass
         {
-            float distance = Vector3.Distance(transform.position, avatarObject.transform.position);
-            if (distance <= 10.0f)
+            HLSLPROGRAM
+            #pragma target 5.0
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma multi_compile_fwdbase
+            #pragma multi_compile_fog
+
+            #include "UnityCG.cginc"
+            #include "AutoLight.cginc"
+
+            // liltoonの変数とヘルパー関数
+            // ...
+
+            sampler2D _PCSShadowMap;
+            float4 _PCSShadowMap_TexelSize;
+            float _PCSSoftness;
+            float _PCSSSampleRadius;
+            int _PCSSBlockerSampleCount;
+            int _PCSSPCFSampleCount;
+            float _PCSSMaxStaticGradientBias;
+            float _PCSSBlockerGradientBias;
+            float _PCSSPCFGradientBias;
+            float _PCSSCascadeBlendDistance;
+            float4 _PCSSNoiseCoords;
+            sampler2D _PCSSNoiseTexture;
+            int _PCSSupportOrthographicProjection;
+            float _PCSShadowStrength;
+
+            static const float2 PoissonOffsets[64] = {
+                // ...
+            };
+
+            float SamplePCSSShadowMap(float4 shadowCoord, float softness, float sampleRadius)
             {
-                // PCSSの効果を適用
-                UpdateShaderProperties();
+                float shadow = 0.0;
+
+                #ifndef SHADER_API_GLES
+                // RX5700XTでのキャッシュオーバーフローを防ぐため、ループ回数を制限
+                int maxSamples = min(_PCSSBlockerSampleCount, 32);
+                for (int i = 0; i < maxSamples; i++)
+                {
+                    float2 offset = PoissonOffsets[i] * sampleRadius;
+                    shadow += tex2Dproj(_PCSShadowMap, shadowCoord + float4(offset, 0.0, 0.0)).r;
+                }
+                shadow /= maxSamples;
+                #else
+                // GLES環境ではPCFフィルタリングを使用
+                shadow = tex2Dproj(_PCSShadowMap, shadowCoord).r;
+                #endif
+
+                float blockerDepth = shadow;
+
+                if (blockerDepth < shadowCoord.z)
+                {
+                    float penumbraSize = (shadowCoord.z - blockerDepth) / blockerDepth;
+                    float filterRadius = penumbraSize * softness;
+
+                    #ifndef SHADER_API_GLES
+                    // RX5700XTでのキャッシュオーバーフローを防ぐため、ループ回数を制限
+                    int maxPCFSamples = min(_PCSSPCFSampleCount, 32);
+                    for (int i = 0; i < maxPCFSamples; i++)
+                    {
+                        float2 offset = PoissonOffsets[i] * filterRadius;
+                        shadow += tex2Dproj(_PCSShadowMap, shadowCoord + float4(offset, 0.0, 0.0)).r;
+                    }
+                    shadow /= maxPCFSamples;
+                    #else
+                    // GLES環境ではPCFフィルタリングを使用
+                    shadow = tex2Dproj(_PCSShadowMap, shadowCoord).r;
+                    #endif
+                }
+
+                return saturate(shadow);
             }
-            else
+
+            struct appdata
             {
-                // PCSSの効果を徐々に減衰させる
-                float t = Mathf.Clamp01((distance - 10.0f) / 5.0f);
-                Shader.SetGlobalFloat("_PCSShadowStrength", Mathf.Lerp(1.0f, 0.0f, t));
+                float4 vertex : POSITION;
+                float3 normal : NORMAL;
+                float2 uv : TEXCOORD0;
+                // liltoonの追加の入力データ
+                // ...
+            };
+
+            struct v2f
+            {
+                float4 pos : SV_POSITION;
+                float2 uv : TEXCOORD0;
+                UNITY_FOG_COORDS(1)
+                float4 worldPos : TEXCOORD2;
+                float3 normal : TEXCOORD3;
+                // liltoonの追加の varying 変数
+                // ...
+            };
+
+            v2f vert(appdata v)
+            {
+                v2f o;
+                UNITY_INITIALIZE_OUTPUT(v2f, o);
+
+                o.pos = UnityObjectToClipPos(v.vertex);
+                o.uv = v.uv;
+                o.worldPos = mul(unity_ObjectToWorld, v.vertex);
+                o.normal = UnityObjectToWorldNormal(v.normal);
+
+                // liltoonの頂点シェーダーの処理
+                // ...
+
+                UNITY_TRANSFER_FOG(o, o.pos);
+                return o;
             }
+
+            float4 frag(v2f i) : SV_Target
+            {
+                // liltoonのフラグメントシェーダーの処理
+                // ...
+
+                // PCSSシャドウマップをサンプリング
+                float4 shadowCoord = mul(unity_WorldToShadow[0], float4(i.worldPos, 1.0));
+                float shadow = SamplePCSSShadowMap(shadowCoord, _PCSSoftness, _PCSSSampleRadius);
+                shadow = lerp(1.0, shadow, _PCSShadowStrength);
+
+                // シャドウをライティングに適用
+                float3 lighting = (1.0 - shadow) * directLight;
+
+                // liltoonのライティング処理
+                // ...
+
+                // 最終的な色の計算
+                float4 col = float4(0.0, 0.0, 0.0, 0.0);
+
+                // liltoonの最終的な色の計算
+                // ...
+
+                // アルファ値のクランプ
+                col.a = saturate(col.a);
+
+                UNITY_APPLY_FOG(i.fogCoord, col);
+                return col;
+            }
+            ENDHLSL
         }
     }
 
-    private GameObject FindAvatarObject()
-    {
-        GameObject[] rootObjects = UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects();
-        foreach (GameObject rootObject in rootObjects)
-        {
-            if (rootObject.name == "Avatar")
-            {
-                return rootObject;
-            }
-        }
-        return null;
-    }
-}
+    Fallback "Diffuse"
+    CustomEditor "lilToonInspector"
