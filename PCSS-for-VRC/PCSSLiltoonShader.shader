@@ -1,180 +1,5 @@
-// PCSSLightPlugin.cs
-using UnityEngine;
-using UnityEngine.Rendering;
-using System;
-
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
-
-[ExecuteInEditMode]
-public class PCSSLightPlugin : MonoBehaviour
-{
-    public int resolution = 4096;
-    public bool customShadowResolution = false;
-
-    [Range(1, 64)]
-    public int blockerSampleCount = 16;
-    [Range(1, 64)]
-    public int PCFSampleCount = 16;
-
-    public Texture2D noiseTexture;
-
-    [Range(0f, 1f)]
-    public float softness = 0.5f;
-    [Range(0f, 1f)]
-    public float sampleRadius = 0.02f;
-
-    [Range(0f, 1f)]
-    public float maxStaticGradientBias = 0.05f;
-    [Range(0f, 1f)]
-    public float blockerGradientBias = 0f;
-    [Range(0f, 1f)]
-    public float PCFGradientBias = 1f;
-
-    [Range(0f, 1f)]
-    public float cascadeBlendDistance = 0.5f;
-
-    public bool supportOrthographicProjection;
-
-    public RenderTexture shadowRenderTexture;
-    public RenderTextureFormat format = RenderTextureFormat.RFloat;
-    public FilterMode filterMode = FilterMode.Bilinear;
-
-    private int shadowmapPropID;
-    private CommandBuffer copyShadowBuffer;
-    private Light lightComponent;
-    private GameObject avatarObject;
-
-    private void OnEnable()
-    {
-        if (Application.isPlaying)
-        {
-            try
-            {
-                SetupLight();
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Error setting up PCSS light: {e.Message}");
-            }
-        }
-    }
-
-    private void OnDisable()
-    {
-        if (Application.isPlaying)
-        {
-            try
-            {
-                CleanupLight();
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Error cleaning up PCSS light: {e.Message}");
-            }
-        }
-    }
-
-    #if UNITY_EDITOR
-    private void OnValidate()
-    {
-        if (!Application.isPlaying)
-        {
-            try
-            {
-                SetupLight();
-            }
-            catch (Exception e)
-            {
-                Debug.LogError($"Error setting up PCSS light: {e.Message}");
-            }
-        }
-    }
-    #endif
-
-    private void SetupLight()
-    {
-        lightComponent = GetComponent<Light>();
-        if (lightComponent == null)
-        {
-            Debug.LogError("PCSSLightPlugin requires a Light component.");
-            return;
-        }
-
-        if (customShadowResolution)
-        {
-            lightComponent.shadowCustomResolution = resolution;
-        }
-        else
-        {
-            lightComponent.shadowCustomResolution = 0;
-        }
-
-        shadowmapPropID = Shader.PropertyToID("_PCSShadowMap");
-        copyShadowBuffer = new CommandBuffer();
-        copyShadowBuffer.name = "PCSS Shadow Copy";
-
-        lightComponent.AddCommandBuffer(LightEvent.AfterShadowMap, copyShadowBuffer);
-
-        if (shadowRenderTexture == null)
-        {
-            shadowRenderTexture = new RenderTexture(resolution, resolution, 0, format);
-            shadowRenderTexture.filterMode = filterMode;
-            shadowRenderTexture.useMipMap = false;
-            shadowRenderTexture.Create();
-        }
-
-        UpdateShaderProperties();
-        UpdateCommandBuffer();
-    }
-
-    private void CleanupLight()
-    {
-        if (lightComponent != null)
-        {
-            lightComponent.RemoveCommandBuffer(LightEvent.AfterShadowMap, copyShadowBuffer);
-        }
-
-        if (shadowRenderTexture != null)
-        {
-            shadowRenderTexture.Release();
-            DestroyImmediate(shadowRenderTexture);
-            shadowRenderTexture = null;
-        }
-    }
-
-    private void UpdateShaderProperties()
-    {
-        Shader.SetGlobalInt("_PCSSBlockerSampleCount", blockerSampleCount);
-        Shader.SetGlobalInt("_PCSSPCFSampleCount", PCFSampleCount);
-
-        Shader.SetGlobalFloat("_PCSSoftness", softness);
-        Shader.SetGlobalFloat("_PCSSSampleRadius", sampleRadius);
-
-        Shader.SetGlobalFloat("_PCSSMaxStaticGradientBias", maxStaticGradientBias);
-        Shader.SetGlobalFloat("_PCSSBlockerGradientBias", blockerGradientBias);
-        Shader.SetGlobalFloat("_PCSSPCFGradientBias", PCFGradientBias);
-
-        Shader.SetGlobalFloat("_PCSSCascadeBlendDistance", cascadeBlendDistance);
-
-        if (noiseTexture != null)
-        {
-            Shader.SetGlobalVector("_PCSSNoiseCoords", new Vector4(1f / noiseTexture.width, 1f / noiseTexture.height, 0f, 0f));
-            Shader.SetGlobalTexture("_PCSSNoiseTexture", noiseTexture);
-        }
-
-        Shader.SetGlobalInt("_PCSSupportOrthographicProjection", supportOrthographicProjection ? 1 : 0);
-    }
-
-    private void UpdateCommandBuffer()
-    {
-        copyShadowBuffer.Clear();
-        copyShadowBuffer.SetShadowSamplingMode(BuiltinRenderTextureType.CurrentActive, ShadowSamplingMode.RawDepth);
-        copyShadowBuffer.Blit(BuiltinRenderTextureType.CurrentActive, shadowRenderTexture);
-        copyShadowBuffer.SetGlobalTexture(shadowmapPropID, shadowRenderTexture);
-    }
-Shader "PCSSliltoon"
+// PCSSLiltoon.shader
+Shader "PCSSLiltoon"
 {
     Properties
     {
@@ -189,8 +14,7 @@ Shader "PCSSliltoon"
 
         Pass
         {
-            HLSLPROGRAM
-            #pragma target 5.0
+            CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
             #pragma multi_compile_fwdbase
@@ -203,7 +27,6 @@ Shader "PCSSliltoon"
             // ...
 
             sampler2D _PCSShadowMap;
-            float4 _PCSShadowMap_TexelSize;
             float _PCSSoftness;
             float _PCSSSampleRadius;
             int _PCSSBlockerSampleCount;
@@ -224,20 +47,12 @@ Shader "PCSSliltoon"
             float SamplePCSSShadowMap(float4 shadowCoord, float softness, float sampleRadius)
             {
                 float shadow = 0.0;
-
-                #ifndef SHADER_API_GLES
-                // RX5700XTでのキャッシュオーバーフローを防ぐため、ループ回数を制限
-                int maxSamples = min(_PCSSBlockerSampleCount, 32);
-                for (int i = 0; i < maxSamples; i++)
+                for (int i = 0; i < _PCSSBlockerSampleCount; i++)
                 {
                     float2 offset = PoissonOffsets[i] * sampleRadius;
                     shadow += tex2Dproj(_PCSShadowMap, shadowCoord + float4(offset, 0.0, 0.0)).r;
                 }
-                shadow /= maxSamples;
-                #else
-                // GLES環境ではPCFフィルタリングを使用
-                shadow = tex2Dproj(_PCSShadowMap, shadowCoord).r;
-                #endif
+                shadow /= _PCSSBlockerSampleCount;
 
                 float blockerDepth = shadow;
 
@@ -246,22 +61,15 @@ Shader "PCSSliltoon"
                     float penumbraSize = (shadowCoord.z - blockerDepth) / blockerDepth;
                     float filterRadius = penumbraSize * softness;
 
-                    #ifndef SHADER_API_GLES
-                    // RX5700XTでのキャッシュオーバーフローを防ぐため、ループ回数を制限
-                    int maxPCFSamples = min(_PCSSPCFSampleCount, 32);
-                    for (int i = 0; i < maxPCFSamples; i++)
+                    for (int i = 0; i < _PCSSPCFSampleCount; i++)
                     {
                         float2 offset = PoissonOffsets[i] * filterRadius;
                         shadow += tex2Dproj(_PCSShadowMap, shadowCoord + float4(offset, 0.0, 0.0)).r;
                     }
-                    shadow /= maxPCFSamples;
-                    #else
-                    // GLES環境ではPCFフィルタリングを使用
-                    shadow = tex2Dproj(_PCSShadowMap, shadowCoord).r;
-                    #endif
+                    shadow /= _PCSSPCFSampleCount;
                 }
 
-                return saturate(shadow);
+                return shadow;
             }
 
             struct appdata
@@ -280,23 +88,19 @@ Shader "PCSSliltoon"
                 UNITY_FOG_COORDS(1)
                 float4 worldPos : TEXCOORD2;
                 float3 normal : TEXCOORD3;
-                // liltoonの追加の varying 変数
+                // liltoonの追加の varying変数
                 // ...
             };
 
             v2f vert(appdata v)
             {
                 v2f o;
-                UNITY_INITIALIZE_OUTPUT(v2f, o);
-
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.uv = v.uv;
                 o.worldPos = mul(unity_ObjectToWorld, v.vertex);
                 o.normal = UnityObjectToWorldNormal(v.normal);
-
                 // liltoonの頂点シェーダーの処理
                 // ...
-
                 UNITY_TRANSFER_FOG(o, o.pos);
                 return o;
             }
@@ -318,20 +122,16 @@ Shader "PCSSliltoon"
                 // ...
 
                 // 最終的な色の計算
-                float4 col = float4(0.0, 0.0, 0.0, 0.0);
-
-                // liltoonの最終的な色の計算
-                // ...
-
-                // アルファ値のクランプ
-                col.a = saturate(col.a);
+                float4 col = // ...;
 
                 UNITY_APPLY_FOG(i.fogCoord, col);
                 return col;
             }
-            ENDHLSL
+            ENDCG
         }
     }
 
+    Fallback "Diffuse"
+}
     Fallback "Diffuse"
     CustomEditor "lilToonInspector"
